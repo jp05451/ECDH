@@ -1,8 +1,5 @@
 #include "ecdh.hpp"
 
-using namespace std;
-
-// ...existing code...
 ECDH::ECDH()
 {
     key = nullptr;
@@ -14,7 +11,7 @@ ECDH::~ECDH()
 {
     if (key)
     {
-        EC_KEY_free(key);
+        EVP_PKEY_free(key);
         key = nullptr;
     }
     if (sharedKey)
@@ -26,46 +23,74 @@ ECDH::~ECDH()
 
 void ECDH::generate_key()
 {
-    key = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
-    // 產生 EC_KEY
-    EC_KEY_generate_key(key);
+    EVP_PKEY_CTX *paramCtx = EVP_PKEY_CTX_new_from_name(nullptr, "EC", nullptr);
+    EVP_PKEY *params = nullptr;
+    EVP_PKEY_paramgen_init(paramCtx);
+    EVP_PKEY_CTX_set_ec_paramgen_curve_nid(paramCtx, NID_X9_62_prime256v1);
+    EVP_PKEY_paramgen(paramCtx, &params);
+
+    EVP_PKEY_CTX *keyCtx = EVP_PKEY_CTX_new(params, nullptr);
+    EVP_PKEY_keygen_init(keyCtx);
+    EVP_PKEY_keygen(keyCtx, &key);
+
+    EVP_PKEY_free(params);
+    EVP_PKEY_CTX_free(keyCtx);
+    EVP_PKEY_CTX_free(paramCtx);
 }
 
 void ECDH::compute_key(const EC_POINT *peer_pub_key)
 {
-    // 使用 ECDH_compute_key() 計算共享金鑰，存入 sharedKey
-    // 更新 sharedKeyLen
-    int fieldSize = EC_GROUP_get_degree(EC_KEY_get0_group(key));
-    sharedKeyLen = (fieldSize + 7) / 8;
-    sharedKey = (unsigned char *)OPENSSL_malloc(sharedKeyLen);
-    ECDH_compute_key(sharedKey, sharedKeyLen, peer_pub_key, key, nullptr);
+    // 建立對方 EVP_PKEY
+    EVP_PKEY *peerKey = EVP_PKEY_new();
+    EC_KEY *ecKey = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
+    EC_KEY_set_public_key(ecKey, peer_pub_key);
+    EVP_PKEY_assign_EC_KEY(peerKey, ecKey);
+
+    EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new(key, nullptr);
+    EVP_PKEY_derive_init(ctx);
+    EVP_PKEY_derive_set_peer(ctx, peerKey);
+
+    size_t len = 0;
+    EVP_PKEY_derive(ctx, nullptr, &len);
+    sharedKey = (unsigned char *)OPENSSL_malloc(len);
+    EVP_PKEY_derive(ctx, sharedKey, &len);
+    sharedKeyLen = len;
+
+    EVP_PKEY_free(peerKey);
+    EVP_PKEY_CTX_free(ctx);
 }
 
-EC_POINT *ECDH::get_public_key()
+const EC_POINT *ECDH::get_public_key()
 {
-    // 傳回本地端公鑰
-    return (EC_POINT *)EC_KEY_get0_public_key(key);
+    const EC_KEY *ecKey = EVP_PKEY_get0_EC_KEY(key);
+    return EC_KEY_get0_public_key(ecKey);
 }
 
 unsigned char *ECDH::get_shared_key()
 {
-    // 傳回 sharedKey
     return sharedKey;
-}
-
-void ECDH::print_key()
-{
-    // 顯示金鑰資訊
-    // 可使用 BN_bn2hex() 轉換或顯示
-    for (size_t i = 0; i < sharedKeyLen; i++)
-    {
-        printf("%02X", sharedKey[i]);
-    }
-    printf("\n");
 }
 
 size_t ECDH::get_shared_key_len()
 {
-    // 傳回 sharedKeyLen
     return sharedKeyLen;
+}
+
+void ECDH::print_key()
+{
+    const EC_KEY *ecKey = EVP_PKEY_get0_EC_KEY(key);
+    const EC_GROUP *group = EC_KEY_get0_group(ecKey);
+    const BIGNUM *privKey = EC_KEY_get0_private_key(ecKey);
+    const EC_POINT *pubKey = EC_KEY_get0_public_key(ecKey);
+
+    printf("Private key: ");
+    BN_print_fp(stdout, privKey);
+    printf("\n");
+
+    printf("Shared key: ");
+    for (size_t i = 0; i < sharedKeyLen; i++)
+    {
+        printf("%02x", sharedKey[i]);
+    }
+    printf("\n");
 }
